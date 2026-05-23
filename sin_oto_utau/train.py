@@ -13,7 +13,6 @@ from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 
 TARGET_COLUMNS = [
-    "offset",
     "consonant",
     "cutoff",
     "preutterance",
