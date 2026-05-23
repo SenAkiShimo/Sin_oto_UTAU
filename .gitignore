@@ -1,0 +1,74 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environment
+.venv/
+venv/
+env/
+
+# macOS
+.DS_Store
+
+# VS Code local settings
+.vscode/
+
+# Logs
+*.log
+
+# Audio files
+*.wav
+*.flac
+*.mp3
+*.ogg
+*.aiff
+*.aif
+
+# UTAU / voicebank files
+oto.ini
+*.frq
+*.pmk
+*.llsm
+*.mrq
+*.dio
+*.pmk
+prefix.map
+character.txt
+readme.txt
+
+# Training data - private
+data/raw_banks/
+data/raw_voicebanks/
+data/private/
+data/train/
+data/dataset.csv
+data/*.csv
+datasets/
+voicebanks/
+
+# Generated outputs
+data/output/
+outputs/
+generated/
+
+# Models
+models/
+*.joblib
+*.pkl
+*.pickle
+*.pt
+*.pth
+*.onnx
+
+# Librosa / audio cache
+.cache/
+.cache_librosa/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Packaging
+build/
+dist/
+*.egg-info/
