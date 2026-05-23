@@ -35,18 +35,13 @@ CATEGORICAL_COLUMNS = [
 NUMERIC_COLUMNS = [
     "sample_rate",
     "full_duration_ms",
-    "entry_window_start_ms",
-    "entry_window_end_ms",
     "entry_window_duration_ms",
     "local_duration_ms",
     "local_rms",
     "local_onset_ms",
-    "absolute_onset_ms",
     "local_end_ms",
-    "absolute_end_ms",
     "local_spectral_centroid",
     "local_zero_crossing_rate",
-    "offset_to_detected_onset_ms",
 ]
 
 
