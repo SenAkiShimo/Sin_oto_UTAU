@@ -1,0 +1,17 @@
+wav,alias,rough_start_ms,rough_end_ms,line_text,alias_index,take
+a_ba_pa_ta_take001.wav,a,0.000,2283.215,a_ba_pa_ta,0,1
+a_ba_pa_ta_take001.wav,ba,2283.215,3229.423,a_ba_pa_ta,1,1
+a_ba_pa_ta_take001.wav,pa,3229.423,3947.208,a_ba_pa_ta,2,1
+a_ba_pa_ta_take001.wav,ta,3947.208,4494.157,a_ba_pa_ta,3,1
+i_bi_pi_ti_take002.wav,i,0.000,606.299,i_bi_pi_ti,0,2
+i_bi_pi_ti_take002.wav,bi,606.299,1222.315,i_bi_pi_ti,1,2
+i_bi_pi_ti_take002.wav,pi,1222.315,1901.669,i_bi_pi_ti,2,2
+i_bi_pi_ti_take002.wav,ti,1901.669,2564.248,i_bi_pi_ti,3,2
+u_bu_pu_tu_take003.wav,u,0.000,745.939,u_bu_pu_tu,0,3
+u_bu_pu_tu_take003.wav,bu,745.939,1261.144,u_bu_pu_tu,1,3
+u_bu_pu_tu_take003.wav,pu,1261.144,1921.168,u_bu_pu_tu,2,3
+u_bu_pu_tu_take003.wav,tu,1921.168,2537.488,u_bu_pu_tu,3,3
+ang_bang_pang_tang_take004.wav,ang,0.000,543.777,ang_bang_pang_tang,0,4
+ang_bang_pang_tang_take004.wav,bang,543.777,1105.587,ang_bang_pang_tang,1,4
+ang_bang_pang_tang_take004.wav,pang,1105.587,1643.294,ang_bang_pang_tang,2,4
+ang_bang_pang_tang_take004.wav,tang,1643.294,2244.555,ang_bang_pang_tang,3,4
