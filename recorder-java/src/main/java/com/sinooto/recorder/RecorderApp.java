@@ -1,5 +1,6 @@
 package com.sinooto.recorder;
 
+import javafx.scene.input.KeyEvent;
 import javafx.animation.AnimationTimer;
 import javafx.application.Application;
 import javafx.application.Platform;
@@ -15,7 +16,10 @@ import javafx.scene.paint.Color;
 import javafx.stage.Stage;
 
 import javax.sound.sampled.*;
+import javax.swing.text.html.ListView;
+
 import java.io.*;
+import java.lang.classfile.Label;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
@@ -90,6 +94,8 @@ public class RecorderApp extends Application {
 
     private PendingTake pendingTake = null;
 
+    private long lastSpaceMarkNanos = 0L;
+
     private final DecimalFormat one = new DecimalFormat("0.0");
     private final DecimalFormat three = new DecimalFormat("0.000");
 
@@ -112,10 +118,13 @@ public class RecorderApp extends Application {
 
         Scene scene = new Scene(root, 1250, 760);
 
-        scene.setOnKeyPressed(event -> {
+        scene.addEventFilter(KeyEvent.KEY_PRESSED, event -> {
             if (event.getCode() == KeyCode.SPACE) {
                 event.consume();
-                markAliasStart();
+                
+                if (recording) {
+                    markAliasStart();
+                }
             }
         });
 
@@ -216,6 +225,14 @@ public class RecorderApp extends Application {
         playButton.setDisable(true);
         saveButton.setDisable(true);
         cacheButton.setDisable(true);
+
+        startButton.setFocusTraversable(false);
+        stopButton.setFocusTraversable(false);
+        playButton.setFocusTraversable(false);
+        saveButton.setFocusTraversable(false);
+        cacheButton.setFocusTraversable(false);
+        redoButton.setFocusTraversable(false);
+        nextButton.setFocusTraversable(false);
 
         buttons.getChildren().addAll(
                 startButton,
@@ -409,6 +426,7 @@ public class RecorderApp extends Application {
         aliasIndex = 0;
         startMarksMs.clear();
         currentAudioBytes.reset();
+        lastSpaceMarkNanos = 0L;
         Arrays.fill(ringBuffer, 0.0);
         ringWritePos = 0;
 
@@ -481,6 +499,15 @@ public class RecorderApp extends Application {
         if (!recording) {
             return;
         }
+        
+        long now = System.nanoTime();
+        
+        if (now - lastSpaceMarkNanos < 180_000_000L) {
+            return;
+        }
+
+
+        lastSpaceMarkNanos = now;
 
         RecordingLine line = currentLine();
 
@@ -489,22 +516,30 @@ public class RecorderApp extends Application {
             statusLabel.setTextFill(Color.web("#aa7700"));
             return;
         }
-
-        double ms = (System.nanoTime() - recordStartNanos) / 1_000_000.0;
-        startMarksMs.add(ms);
-
-        String alias = line.aliases.get(aliasIndex);
-        System.out.println("Start mark " + alias + ": " + one.format(ms) + " ms");
-
-        aliasIndex++;
-
-        if (aliasIndex >= line.aliases.size()) {
-            statusLabel.setText("Last alias marked. Finish the final sound, then press Stop.");
-            statusLabel.setTextFill(Color.web("#007700"));
+        
+        double ms = (now - recordStartNanos) / 1_000_000.0;
+        
+        if (ms < 0) {
+            return;
         }
 
+    startMarksMs.add(ms);
+
+    String alias = line.aliases.get(aliasIndex);
+    System.out.println("Start mark " + alias + ": " + one.format(ms) + " ms");
+
+    aliasIndex++;
+    
+    if (aliasIndex >= line.aliases.size()) {
+        statusLabel.setText("Last alias marked. Finish the final sound, then press Stop.");
+        statusLabel.setTextFill(Color.web("#007700"));
+    } else {
+        statusLabel.setText("Marked " + alias + ". Continue.");
+        statusLabel.setTextFill(Color.web("#555555"));
+        }
+        
         updateDisplay();
-    }
+}
 
     private void stopRecording() {
         if (!recording) {
