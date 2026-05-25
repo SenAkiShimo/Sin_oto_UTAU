@@ -30,7 +30,28 @@ import java.time.format.DateTimeFormatter;
 import java.util.*;
 
 public class RecorderApp extends Application {
-    private static final Path PROJECT_ROOT = Paths.get("").toAbsolutePath().getParent();
+    private static final Path PROJECT_ROOT = detectProjectRoot();
+
+private static Path detectProjectRoot() {
+    Path cwd = Paths.get("").toAbsolutePath();
+    if (cwd.getFileName() != null && cwd.getFileName().toString().equals("recorder-java")) {
+        return cwd.getParent();
+    }
+
+    if (Files.exists(cwd.resolve("recorder-java")) && Files.exists(cwd.resolve("scripts"))) {
+        return cwd;
+    }
+
+    Path cur = cwd;
+    while (cur != null) {
+        if (Files.exists(cur.resolve("scripts")) && Files.exists(cur.resolve("recorder-java"))) {
+            return cur;
+        }
+        cur = cur.getParent();
+    }
+
+    return cwd;
+}
     private static final Path RECORDING_LIST = PROJECT_ROOT.resolve("data/recording_lists/mandarin_cvvc_test.txt");
 
     private Path finalDir = PROJECT_ROOT.resolve("data/new_recordings");
@@ -453,15 +474,19 @@ public class RecorderApp extends Application {
                 return;
             }
 
-            ProcessBuilder pb = new ProcessBuilder(
-                    "python",
-                    PROJECT_ROOT.resolve("scripts/generate_oto_from_recording_index.py").toString(),
-                    "--recording-dir",
-                    outputDir.toString(),
-                    "--model",
-                    model.toString(),
-                    "--output",
-                    outputDir.resolve("oto.ini").toString()
+            Path venvPython = PROJECT_ROOT.resolve(".venv/bin/python");
+                        String pythonCommand = Files.exists(venvPython) ? venvPython.toString() : "python3";
+                        Path generateScript = PROJECT_ROOT.resolve("scripts/generate_oto_from_recording_index.py");
+                        
+                        ProcessBuilder pb = new ProcessBuilder(
+                            pythonCommand,
+                            generateScript.toString(),
+                            "--recording-dir",
+                            outputDir.toString(),
+                            "--model",
+                            model.toString(),
+                            "--output",
+                            outputDir.resolve("oto.ini").toString()
             );
 
             pb.directory(PROJECT_ROOT.toFile());
