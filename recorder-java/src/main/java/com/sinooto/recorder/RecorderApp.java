@@ -1,5 +1,7 @@
 package com.sinooto.recorder;
 
+import javafx.stage.DirectoryChooser;
+import javafx.stage.FileChooser;
 import javafx.scene.input.KeyEvent;
 import javafx.animation.AnimationTimer;
 import javafx.application.Application;
@@ -31,11 +33,13 @@ public class RecorderApp extends Application {
     private static final Path PROJECT_ROOT = Paths.get("").toAbsolutePath().getParent();
     private static final Path RECORDING_LIST = PROJECT_ROOT.resolve("data/recording_lists/mandarin_cvvc_test.txt");
 
-    private static final Path FINAL_DIR = PROJECT_ROOT.resolve("data/new_recordings");
-    private static final Path CACHE_DIR = PROJECT_ROOT.resolve("data/recording_cache");
+    private Path finalDir = PROJECT_ROOT.resolve("data/new_recordings");
+    private Path cacheDir = PROJECT_ROOT.resolve("data/recording_cache");
 
-    private static final Path FINAL_INDEX = FINAL_DIR.resolve("recording_index.csv");
-    private static final Path CACHE_INDEX = CACHE_DIR.resolve("recording_index_cache.csv");
+    private Path finalIndex = finalDir.resolve("recording_index.csv");
+    private Path cacheIndex = cacheDir.resolve("recording_index_cache.csv");
+
+    private Path modelPath = PROJECT_ROOT.resolve("models/oto_model.joblib");
 
     private static final float SAMPLE_RATE = 48000f;
     private static final int CHANNELS = 1;
@@ -72,6 +76,8 @@ public class RecorderApp extends Application {
     private Button nextButton;
 
     private TextField noteField;
+    private TextField outputDirField;
+    private TextField modelPathField;
 
     private int lineIndex = 0;
     private int aliasIndex = 0;
@@ -105,8 +111,8 @@ public class RecorderApp extends Application {
 
     @Override
     public void start(Stage stage) throws Exception {
-        Files.createDirectories(FINAL_DIR);
-        Files.createDirectories(CACHE_DIR);
+        Files.createDirectories(finalDir);
+        Files.createDirectories(cacheDir);
         Files.createDirectories(RECORDING_LIST.getParent());
 
         ensureDefaultRecordingList();
@@ -179,13 +185,13 @@ public class RecorderApp extends Application {
     private void loadLatestTakeForCurrentLine() {
         RecordingLine line = currentLine();
         try {
-            LoadedTake finalTake = findTakeInIndex(FINAL_INDEX, FINAL_DIR, line.text);
+            LoadedTake finalTake = findTakeInIndex(finalIndex, finalDir, line.text);
             if (finalTake != null) {
                 displayLoadedTake(finalTake, "Saved: " + finalTake.wavName);
                 return;
             }
 
-            LoadedTake cacheTake = findTakeInIndex(CACHE_INDEX, CACHE_DIR, line.text);
+            LoadedTake cacheTake = findTakeInIndex(cacheIndex, cacheDir, line.text);
             if (cacheTake != null) {
                 displayLoadedTake(cacheTake, "Cache: " + cacheTake.wavName);
                 return;
@@ -374,7 +380,41 @@ public class RecorderApp extends Application {
         help.setWrapText(true);
         help.setStyle("-fx-text-fill: #555555;");
 
-        box.getChildren().addAll(title, noteRow, naturalGrid, sep, sharpGrid, help);
+        TitledPane pathPane = new TitledPane();
+        pathPane.setText("Paths");
+
+        VBox pathBox = new VBox(6);
+        pathBox.setPadding(new Insets(8));
+
+        outputDirField = new TextField(finalDir.toString());
+        outputDirField.setPrefWidth(220);
+
+        Button chooseOutputButton = new Button("Choose Output Folder");
+        chooseOutputButton.setOnAction(e -> chooseOutputFolder());
+
+        modelPathField = new TextField(modelPath.toString());
+        modelPathField.setPrefWidth(220);
+
+        Button chooseModelButton = new Button("Choose Model");
+        chooseModelButton.setOnAction(e -> chooseModelFile());
+
+        Button generateOtoButton = new Button("Generate oto.ini");
+        generateOtoButton.setOnAction(e -> generateOto());
+
+        pathBox.getChildren().addAll(
+                new Label("Output voicebank folder:"),
+                outputDirField,
+                chooseOutputButton,
+                new Label("AI model file:"),
+                modelPathField,
+                chooseModelButton,
+                generateOtoButton
+        );
+
+        pathPane.setContent(pathBox);
+        pathPane.setCollapsible(false);
+
+        box.getChildren().addAll(title, noteRow, naturalGrid, sep, sharpGrid, pathPane, help);
         return box;
     }
 
@@ -390,6 +430,78 @@ public class RecorderApp extends Application {
                     StandardCharsets.UTF_8
             );
         }
+    }
+
+    private void generateOto() {
+        try {
+            Path outputDir = Paths.get(outputDirField.getText()).toAbsolutePath();
+            Path model = Paths.get(modelPathField.getText()).toAbsolutePath();
+
+            if (!Files.exists(outputDir.resolve("recording_index.csv"))) {
+                showWarning(
+                        "Missing recording_index.csv",
+                        "这个文件夹里没有 recording_index.csv，无法生成 oto.ini。"
+                );
+                return;
+            }
+
+            if (!Files.exists(model)) {
+                showWarning(
+                        "Missing model",
+                        "找不到模型文件：\n" + model
+                );
+                return;
+            }
+
+            ProcessBuilder pb = new ProcessBuilder(
+                    "python",
+                    PROJECT_ROOT.resolve("scripts/generate_oto_from_recording_index.py").toString(),
+                    "--recording-dir",
+                    outputDir.toString(),
+                    "--model",
+                    model.toString(),
+                    "--output",
+                    outputDir.resolve("oto.ini").toString()
+            );
+
+            pb.directory(PROJECT_ROOT.toFile());
+            pb.redirectErrorStream(true);
+
+            Process process = pb.start();
+
+            String result;
+            try (BufferedReader reader = new BufferedReader(
+                    new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8)
+            )) {
+                StringBuilder sb = new StringBuilder();
+                String line;
+
+                while ((line = reader.readLine()) != null) {
+                    sb.append(line).append("\n");
+                }
+
+                result = sb.toString();
+            }
+
+            int exit = process.waitFor();
+
+            if (exit == 0) {
+                showInfo("Generated", "oto.ini 已生成：\n" + outputDir.resolve("oto.ini") + "\n\n" + result);
+            } else {
+                showError("Generate failed", result);
+            }
+
+        } catch (Exception ex) {
+            showError("Generate error", ex.getMessage());
+        }
+    }
+
+    private void showInfo(String title, String message) {
+        Alert a = new Alert(Alert.AlertType.INFORMATION);
+        a.setTitle(title);
+        a.setHeaderText(title);
+        a.setContentText(message);
+        a.showAndWait();
     }
 
     private void loadRecordingList() throws IOException {
@@ -692,7 +804,7 @@ public class RecorderApp extends Application {
         RecordingLine line = pendingTake.line;
 
         String wavName = safeFilename(line.text) + ".wav";
-        Path wavPath = FINAL_DIR.resolve(wavName);
+        Path wavPath = finalDir.resolve(wavName);
 
         if (Files.exists(wavPath)) {
             Alert alert = new Alert(Alert.AlertType.CONFIRMATION);
@@ -711,7 +823,7 @@ public class RecorderApp extends Application {
         displayedMarksMs = new ArrayList<>(pendingTake.startMarksMs);
         displayedDurationMs = pendingTake.stopMs;
         displayedLabel = "Saved: " + wavName;
-        rewriteIndexForLine(FINAL_INDEX, wavName, pendingTake, true);
+        rewriteIndexForLine(finalIndex, wavName, pendingTake, true);
 
         if (!Double.isNaN(pendingTake.avgPitchHz)) {
             savedPitchHz.add(pendingTake.avgPitchHz);
@@ -747,10 +859,10 @@ public class RecorderApp extends Application {
 
         String timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"));
         String wavName = safeFilename(line.text) + "_auto_" + timestamp + ".wav";
-        Path wavPath = CACHE_DIR.resolve(wavName);
+        Path wavPath = cacheDir.resolve(wavName);
 
         writeWav(wavPath, pendingTake.audioBytes);
-        appendIndexRows(CACHE_INDEX, wavName, pendingTake, false);
+        appendIndexRows(cacheIndex, wavName, pendingTake, false);
 
         pendingAutoCacheWavName = wavName;
 
@@ -762,13 +874,67 @@ public class RecorderApp extends Application {
 
         String timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"));
         String wavName = safeFilename(line.text) + "_cache_" + timestamp + ".wav";
-        Path wavPath = CACHE_DIR.resolve(wavName);
+        Path wavPath = cacheDir.resolve(wavName);
 
         writeWav(wavPath, pendingTake.audioBytes);
-        appendIndexRows(CACHE_INDEX, wavName, pendingTake, false);
+        appendIndexRows(cacheIndex, wavName, pendingTake, false);
 
         statusLabel.setText("Cached: " + wavName);
         statusLabel.setTextFill(Color.web("#007700"));
+    }
+
+    private void chooseOutputFolder() {
+        DirectoryChooser chooser = new DirectoryChooser();
+        chooser.setTitle("Choose output voicebank folder");
+
+        if (Files.exists(finalDir)) {
+            chooser.setInitialDirectory(finalDir.toFile());
+        }
+
+        File selected = chooser.showDialog(null);
+
+        if (selected == null) {
+            return;
+        }
+
+        finalDir = selected.toPath();
+        cacheDir = finalDir.resolve("_cache");
+
+        finalIndex = finalDir.resolve("recording_index.csv");
+        cacheIndex = cacheDir.resolve("recording_index_cache.csv");
+
+        outputDirField.setText(finalDir.toString());
+
+        try {
+            Files.createDirectories(finalDir);
+            Files.createDirectories(cacheDir);
+        } catch (IOException ex) {
+            showError("Folder error", ex.getMessage());
+        }
+
+        loadLatestTakeForCurrentLine();
+    }
+
+    private void chooseModelFile() {
+        FileChooser chooser = new FileChooser();
+        chooser.setTitle("Choose oto model");
+
+        chooser.getExtensionFilters().add(
+                new FileChooser.ExtensionFilter("Joblib model", "*.joblib")
+        );
+
+        if (Files.exists(modelPath.getParent())) {
+            chooser.setInitialDirectory(modelPath.getParent().toFile());
+        }
+
+        File selected = chooser.showOpenDialog(null);
+
+        if (selected == null) {
+            return;
+        }
+
+        modelPath = selected.toPath();
+        modelPathField.setText(modelPath.toString());
     }
 
     private void rewriteIndexForLine(Path indexPath, String wavName, PendingTake take, boolean finalIndex) throws IOException {
@@ -1175,11 +1341,11 @@ public class RecorderApp extends Application {
     }
 
     private void loadExistingPitchStats() {
-        if (!Files.exists(FINAL_INDEX)) {
+        if (!Files.exists(finalIndex)) {
             return;
         }
 
-        try (BufferedReader br = Files.newBufferedReader(FINAL_INDEX, StandardCharsets.UTF_8)) {
+        try (BufferedReader br = Files.newBufferedReader(finalIndex, StandardCharsets.UTF_8)) {
             String header = br.readLine();
 
             String line;
