@@ -16,10 +16,8 @@ import javafx.scene.paint.Color;
 import javafx.stage.Stage;
 
 import javax.sound.sampled.*;
-import javax.swing.text.html.ListView;
 
 import java.io.*;
-import java.lang.classfile.Label;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
@@ -93,6 +91,12 @@ public class RecorderApp extends Application {
     private final List<Double> startMarksMs = new ArrayList<>();
 
     private PendingTake pendingTake = null;
+    private byte[] displayedAudioBytes = null;
+    private List<Double> displayedMarksMs = new ArrayList<>();
+    private double displayedDurationMs = 0.0;
+    private String displayedLabel = "";
+
+    private String pendingAutoCacheWavName = null;
 
     private long lastSpaceMarkNanos = 0L;
 
@@ -157,9 +161,12 @@ public class RecorderApp extends Application {
                 lineIndex = idx;
                 aliasIndex = 0;
                 pendingTake = null;
-                updateDisplay();
                 setPendingButtons(false);
-                statusLabel.setText("Selected line. Press Start.");
+                
+                updateDisplay();
+                loadLatestTakeForCurrentLine();
+                
+                statusLabel.setText("Selected line. Press Start, or review existing take.");
                 currentPitchLabel.setText("Current take avg pitch: N/A");
                 drawWaveform();
             }
@@ -167,6 +174,31 @@ public class RecorderApp extends Application {
 
         box.getChildren().addAll(title, lineListView);
         return box;
+    }
+
+    private void loadLatestTakeForCurrentLine() {
+        RecordingLine line = currentLine();
+        try {
+            LoadedTake finalTake = findTakeInIndex(FINAL_INDEX, FINAL_DIR, line.text);
+            if (finalTake != null) {
+                displayLoadedTake(finalTake, "Saved: " + finalTake.wavName);
+                return;
+            }
+
+            LoadedTake cacheTake = findTakeInIndex(CACHE_INDEX, CACHE_DIR, line.text);
+            if (cacheTake != null) {
+                displayLoadedTake(cacheTake, "Cache: " + cacheTake.wavName);
+                return;
+            }
+
+            displayedAudioBytes = null;
+            displayedMarksMs = new ArrayList<>();
+            displayedDurationMs = 0.0;
+            displayedLabel = "";
+
+        } catch (Exception ex) {
+            showWarning("Load take failed", ex.getMessage());
+        }
     }
 
     private VBox buildCenterPanel() {
@@ -190,6 +222,14 @@ public class RecorderApp extends Application {
 
         waveformCanvas = new Canvas(720, 220);
         waveformCanvas.setStyle("-fx-background-color: #111111;");
+
+        waveformCanvas.setOnMouseClicked(event -> {
+            if (!recording && displayedAudioBytes != null) {
+                double ratio = event.getX() / waveformCanvas.getWidth();
+                ratio = Math.max(0.0, Math.min(1.0, ratio));
+                playDisplayedFromRatio(ratio);
+            }
+        });
 
         TitledPane pitchPane = new TitledPane();
         pitchPane.setText("Pitch Stats");
@@ -590,6 +630,14 @@ public class RecorderApp extends Application {
                 pitch
         );
 
+        displayPendingTake();
+
+        try {
+            autoCachePendingTake();
+        } catch (IOException ex) {
+            showWarning("Auto cache failed", ex.getMessage());
+        }
+
         if (Double.isNaN(pitch)) {
             currentPitchLabel.setText("Current take avg pitch: N/A");
         } else {
@@ -619,22 +667,8 @@ public class RecorderApp extends Application {
     }
 
     private void playPendingTake() {
-        if (pendingTake == null) {
-            return;
-        }
-
-        try {
-            File temp = File.createTempFile("sinooto_playback_", ".wav");
-            temp.deleteOnExit();
-            writeWav(temp.toPath(), pendingTake.audioBytes);
-
-            AudioInputStream stream = AudioSystem.getAudioInputStream(temp);
-            Clip clip = AudioSystem.getClip();
-            clip.open(stream);
-            clip.start();
-
-        } catch (Exception ex) {
-            showError("Playback error", ex.getMessage());
+        if (displayedAudioBytes != null) {
+            playPcmFromMs(displayedAudioBytes, 0.0);
         }
     }
 
@@ -673,6 +707,10 @@ public class RecorderApp extends Application {
         }
 
         writeWav(wavPath, pendingTake.audioBytes);
+        displayedAudioBytes = pendingTake.audioBytes;
+        displayedMarksMs = new ArrayList<>(pendingTake.startMarksMs);
+        displayedDurationMs = pendingTake.stopMs;
+        displayedLabel = "Saved: " + wavName;
         rewriteIndexForLine(FINAL_INDEX, wavName, pendingTake, true);
 
         if (!Double.isNaN(pendingTake.avgPitchHz)) {
@@ -687,6 +725,36 @@ public class RecorderApp extends Application {
         updateDisplay();
 
         nextLine();
+    }
+
+    private void displayPendingTake() {
+        if (pendingTake == null) {
+            return;
+        }
+        displayedAudioBytes = pendingTake.audioBytes;
+        displayedMarksMs = new ArrayList<>(pendingTake.startMarksMs);
+        displayedDurationMs = pendingTake.stopMs;
+        displayedLabel = "Pending: " + pendingTake.line.text;
+        drawWaveform();
+    }
+
+    private void autoCachePendingTake() throws IOException {
+        if (pendingTake == null) {
+        return;
+        }
+    
+        RecordingLine line = pendingTake.line;
+
+        String timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"));
+        String wavName = safeFilename(line.text) + "_auto_" + timestamp + ".wav";
+        Path wavPath = CACHE_DIR.resolve(wavName);
+
+        writeWav(wavPath, pendingTake.audioBytes);
+        appendIndexRows(CACHE_INDEX, wavName, pendingTake, false);
+
+        pendingAutoCacheWavName = wavName;
+
+        System.out.println("Auto cached: " + wavPath);
     }
 
     private void saveCacheTake() throws IOException {
@@ -901,8 +969,8 @@ public class RecorderApp extends Application {
 
         if (recording) {
             samples = getRingBufferOrdered();
-        } else if (pendingTake != null) {
-            samples = pcmBytesToDoubleArray(pendingTake.audioBytes);
+        } else if (displayedAudioBytes != null) {
+            samples = pcmBytesToDoubleArray(displayedAudioBytes);
         } else {
             return;
         }
@@ -949,8 +1017,8 @@ public class RecorderApp extends Application {
 
         if (recording) {
             durationMs = (System.nanoTime() - recordStartNanos) / 1_000_000.0;
-        } else if (pendingTake != null) {
-            durationMs = pendingTake.stopMs;
+        } else if (displayedAudioBytes != null) {
+            durationMs = displayedDurationMs;
         } else {
             return;
         }
@@ -970,8 +1038,10 @@ public class RecorderApp extends Application {
         g.setFill(Color.web("#ffcc66"));
         g.setLineWidth(1.0);
 
-        for (int i = 0; i < startMarksMs.size(); i++) {
-            double mark = startMarksMs.get(i);
+        List<Double> marksToDraw = recording ? startMarksMs : displayedMarksMs;
+        
+        for (int i = 0; i < marksToDraw.size(); i++) {
+            double mark = marksToDraw.get(i);
 
             if (mark < windowStartMs) {
                 continue;
@@ -994,6 +1064,44 @@ public class RecorderApp extends Application {
         }
 
         return out;
+    }
+
+    private void playDisplayedFromRatio(double ratio) {
+        if (displayedAudioBytes == null) {
+            return;
+        }
+
+        double startMs = displayedDurationMs * ratio;
+        playPcmFromMs(displayedAudioBytes, startMs);
+    }
+
+    private void playPcmFromMs(byte[] pcmBytes, double startMs) {
+        new Thread(() -> {
+            try {
+                int frameSize = audioFormat.getFrameSize();
+                int startFrame = (int) (startMs / 1000.0 * SAMPLE_RATE);
+                int startByte = Math.max(0, startFrame * frameSize);
+
+                startByte = startByte - (startByte % frameSize);
+
+                if (startByte >= pcmBytes.length) {
+                    return;
+                }
+
+                SourceDataLine line = AudioSystem.getSourceDataLine(audioFormat);
+                line.open(audioFormat);
+                line.start();
+
+                line.write(pcmBytes, startByte, pcmBytes.length - startByte);
+
+                line.drain();
+                line.stop();
+                line.close();
+
+            } catch (Exception ex) {
+                Platform.runLater(() -> showError("Playback error", ex.getMessage()));
+            }
+        }, "SinoOto-PlaybackThread").start();
     }
 
     private double[] pcmBytesToDoubleArray(byte[] bytes) {
@@ -1297,6 +1405,148 @@ public class RecorderApp extends Application {
         a.showAndWait();
     }
 
+    private LoadedTake findTakeInIndex(Path indexPath, Path wavDir, String lineText) throws Exception {
+        if (!Files.exists(indexPath)) {
+            return null;
+        }
+
+        List<String[]> matchedRows = new ArrayList<>();
+
+        try (BufferedReader br = Files.newBufferedReader(indexPath, StandardCharsets.UTF_8)) {
+            String header = br.readLine();
+
+            String row;
+            while ((row = br.readLine()) != null) {
+                String[] cols = parseCsvLine(row);
+
+                if (cols.length >= 7) {
+                    String rowLineText = cols[4];
+
+                    if (rowLineText.equals(lineText)) {
+                        matchedRows.add(cols);
+                    }
+                }
+            }
+        }
+
+        if (matchedRows.isEmpty()) {
+            return null;
+        }
+
+        // 取最后一次出现的 wav，也就是最新缓存/最新正式记录
+        String latestWav = matchedRows.get(matchedRows.size() - 1)[0];
+
+        List<String[]> sameWavRows = new ArrayList<>();
+
+        for (String[] cols : matchedRows) {
+            if (cols.length >= 7 && cols[0].equals(latestWav)) {
+                sameWavRows.add(cols);
+            }
+        }
+
+        sameWavRows.sort(Comparator.comparingInt(cols -> {
+            try {
+                return Integer.parseInt(cols[5]);
+            } catch (Exception e) {
+                return 0;
+            }
+        }));
+
+        List<Double> marks = new ArrayList<>();
+
+        for (String[] cols : sameWavRows) {
+            try {
+                marks.add(Double.parseDouble(cols[2]));
+            } catch (Exception ignored) {
+            }
+        }
+
+        double avgPitch = Double.NaN;
+
+        if (!sameWavRows.isEmpty() && sameWavRows.get(0).length >= 7) {
+            try {
+                avgPitch = Double.parseDouble(sameWavRows.get(0)[6]);
+            } catch (Exception ignored) {
+            }
+        }
+
+        Path wavPath = wavDir.resolve(latestWav);
+
+        if (!Files.exists(wavPath)) {
+            return null;
+        }
+
+        byte[] pcm = readWavAsPcmBytes(wavPath);
+        double durationMs = pcmBytesDurationMs(pcm);
+
+        return new LoadedTake(
+                latestWav,
+                pcm,
+                marks,
+                durationMs,
+                avgPitch
+        );
+    }
+
+    private void displayLoadedTake(LoadedTake take, String label) {
+        displayedAudioBytes = take.audioBytes;
+        displayedMarksMs = new ArrayList<>(take.marksMs);
+        displayedDurationMs = take.durationMs;
+        displayedLabel = label;
+
+        if (Double.isNaN(take.avgPitchHz)) {
+            currentPitchLabel.setText("Displayed take avg pitch: N/A");
+        } else {
+            currentPitchLabel.setText(
+                    "Displayed take avg pitch: " + one.format(take.avgPitchHz) + " Hz (" + hzToNoteName(take.avgPitchHz) + ")"
+            );
+        }
+
+        statusLabel.setText(label);
+        statusLabel.setTextFill(Color.web("#555555"));
+
+        playButton.setDisable(false);
+
+        drawWaveform();
+    }
+    
+    private byte[] readWavAsPcmBytes(Path wavPath) throws Exception {
+        try (AudioInputStream original = AudioSystem.getAudioInputStream(wavPath.toFile())) {
+            AudioFormat baseFormat = original.getFormat();
+
+            AudioFormat targetFormat = new AudioFormat(
+                    AudioFormat.Encoding.PCM_SIGNED,
+                    SAMPLE_RATE,
+                    BITS,
+                    CHANNELS,
+                    CHANNELS * 2,
+                    SAMPLE_RATE,
+                    false
+            );
+
+            try (AudioInputStream converted = AudioSystem.getAudioInputStream(targetFormat, original);
+                ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
+
+                byte[] buffer = new byte[4096];
+                int n;
+
+                while ((n = converted.read(buffer)) != -1) {
+                    baos.write(buffer, 0, n);
+                }
+
+                return baos.toByteArray();
+            }
+        }
+    }
+
+    private double pcmBytesDurationMs(byte[] pcmBytes) {
+        double frameSize = audioFormat.getFrameSize();
+        double frames = pcmBytes.length / frameSize;
+        return frames / SAMPLE_RATE * 1000.0;
+    }
+
+    
+
     @Override
     public void stop() {
         recording = false;
@@ -1312,6 +1562,16 @@ public class RecorderApp extends Application {
     }
 
     private record RecordingLine(String text, List<String> aliases) {
+    }
+
+    private record LoadedTake(
+        String wavName,
+        byte[] audioBytes,
+        List<Double> marksMs,
+        double durationMs,
+        double avgPitchHz
+    ) {
+
     }
 
     private record PendingTake(
