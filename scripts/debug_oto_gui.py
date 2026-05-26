@@ -17,6 +17,22 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from sin_oto_utau.oto_parser import read_oto
 
+MARKER_COLORS = {
+    "offset": "#e53935",
+    "overlap": "#fb8c00",
+    "preutterance": "#1e88e5",
+    "consonant": "#8e24aa",
+    "cutoff": "#43a047",
+}
+
+MARKER_LABELS = {
+    "offset": "offset",
+    "overlap": "overlap",
+    "preutterance": "preutterance",
+    "consonant": "consonant end",
+    "cutoff": "cutoff/end",
+}
+
 
 class OtoDebugGUI:
     def __init__(self, root: tk.Tk):
@@ -282,16 +298,27 @@ class OtoDebugGUI:
 
         x_ms = np.linspace(view_start_ms, view_end_ms, len(y_view))
 
-        self.ax.plot(x_ms, y_view, linewidth=0.7)
-        self.ax.axhline(0, linewidth=0.6)
+        self.ax.plot(x_ms, y_view, color="#222222", linewidth=0.75)
+        self.ax.axhline(0, color="#888888", linewidth=0.6)
+        self.ax.grid(True, which="major", axis="x", alpha=0.18)
 
         if self.show_all_entries.get():
             for other in self.get_current_entries():
-                self.draw_entry_markers(other, alpha=0.35, label_prefix="")
-        else:
-            self.draw_entry_markers(entry, alpha=1.0, label_prefix="")
+                if other is entry:
+                    continue
+                self.draw_entry_markers(
+                    other,
+                    alpha=0.22,
+                    label_prefix="",
+                    selected=False,
+                )
 
-        self.draw_entry_markers(entry, alpha=1.0, label_prefix="selected ")
+        self.draw_entry_markers(
+            entry,
+            alpha=1.0,
+            label_prefix="selected ",
+            selected=True,
+        )
 
         self.ax.set_xlim(view_start_ms, view_end_ms)
         self.ax.set_ylim(-1.1, 1.1)
@@ -302,6 +329,27 @@ class OtoDebugGUI:
         )
         self.ax.set_xlabel("Time (ms)")
         self.ax.set_ylabel("Amplitude")
+
+        legend_text = (
+            "offset=red | overlap=orange | preutterance=blue | "
+            "consonant end=purple | cutoff/end=green"
+        )
+
+        self.ax.text(
+            0.01,
+            0.98,
+            legend_text,
+            transform=self.ax.transAxes,
+            fontsize=9,
+            verticalalignment="top",
+            color="#222222",
+            bbox=dict(
+                facecolor="white",
+                alpha=0.72,
+                edgecolor="#cccccc",
+                boxstyle="round,pad=0.3",
+            ),
+        )
 
         handles, labels = self.ax.get_legend_handles_labels()
         unique = {}
@@ -317,7 +365,7 @@ class OtoDebugGUI:
 
         self.update_info_label(entry, duration_ms)
 
-    def draw_entry_markers(self, entry, alpha: float = 1.0, label_prefix: str = ""):
+    def draw_entry_markers(self,entry,alpha: float = 1.0,label_prefix: str = "",selected: bool = False,):
         duration_ms = len(self.current_audio) / self.current_sr * 1000.0
 
         offset = float(entry.offset)
@@ -328,24 +376,124 @@ class OtoDebugGUI:
 
         end = max(0.0, min(duration_ms, end))
 
-        self.ax.axvline(offset, linestyle="-", linewidth=1.8, alpha=alpha, label=label_prefix + "offset")
-        self.ax.axvline(overlap, linestyle="--", linewidth=1.4, alpha=alpha, label=label_prefix + "overlap")
-        self.ax.axvline(pre, linestyle="--", linewidth=1.4, alpha=alpha, label=label_prefix + "preutterance")
-        self.ax.axvline(consonant_end, linestyle=":", linewidth=1.6, alpha=alpha, label=label_prefix + "consonant end")
-        self.ax.axvline(end, linestyle="-.", linewidth=1.4, alpha=alpha, label=label_prefix + "cutoff/end")
+        if selected:
+            line_width_main = 2.8
+            line_width_sub = 2.2
+            text_alpha = 1.0
+            span_alpha = 0.10
+            zorder = 10
+        else:
+            line_width_main = 1.2
+            line_width_sub = 1.0
+            text_alpha = 0.35
+            span_alpha = 0.025
+            zorder = 3
 
-        self.ax.axvspan(offset, consonant_end, alpha=0.04 * alpha)
-        self.ax.axvspan(offset, end, alpha=0.025 * alpha)
+        self.ax.axvline(
+            offset,
+            color=MARKER_COLORS["offset"],
+            linestyle="-",
+            linewidth=line_width_main,
+            alpha=alpha,
+            label=label_prefix + MARKER_LABELS["offset"],
+            zorder=zorder,
+        )
+
+        self.ax.axvline(
+            overlap,
+            color=MARKER_COLORS["overlap"],
+            linestyle="--",
+            linewidth=line_width_sub,
+            alpha=alpha,
+            label=label_prefix + MARKER_LABELS["overlap"],
+            zorder=zorder,
+        )
+
+        self.ax.axvline(
+            pre,
+            color=MARKER_COLORS["preutterance"],
+            linestyle="--",
+            linewidth=line_width_sub,
+            alpha=alpha,
+            label=label_prefix + MARKER_LABELS["preutterance"],
+            zorder=zorder,
+        )
+
+        self.ax.axvline(
+            consonant_end,
+            color=MARKER_COLORS["consonant"],
+            linestyle=":",
+            linewidth=line_width_sub + 0.3,
+            alpha=alpha,
+            label=label_prefix + MARKER_LABELS["consonant"],
+            zorder=zorder,
+        )
+
+        self.ax.axvline(
+            end,
+            color=MARKER_COLORS["cutoff"],
+            linestyle="-.",
+            linewidth=line_width_sub + 0.2,
+            alpha=alpha,
+            label=label_prefix + MARKER_LABELS["cutoff"],
+            zorder=zorder,
+        )
+
+        if end > offset:
+            self.ax.axvspan(
+                offset,
+                end,
+                color=MARKER_COLORS["cutoff"],
+                alpha=span_alpha,
+                zorder=1,
+            )
+
+        if consonant_end > offset:
+            self.ax.axvspan(
+                offset,
+                consonant_end,
+                color=MARKER_COLORS["consonant"],
+                alpha=span_alpha * 1.4,
+                zorder=2,
+            )
 
         self.ax.text(
             offset,
-            0.92,
+            0.94,
             entry.alias,
             rotation=90,
-            fontsize=8,
-            alpha=alpha,
+            fontsize=9 if selected else 7,
+            color=MARKER_COLORS["offset"],
+            alpha=text_alpha,
             verticalalignment="top",
+            zorder=zorder + 1,
         )
+
+        if selected:
+            summary = (
+                f"alias={entry.alias} | "
+                f"off={entry.offset:.1f}, "
+                f"ovl={entry.overlap:.1f}, "
+                f"pre={entry.preutterance:.1f}, "
+                f"con={entry.consonant:.1f}, "
+                f"cut={entry.cutoff:.1f}"
+            )
+
+            self.ax.text(
+                0.01,
+                0.02,
+                summary,
+                transform=self.ax.transAxes,
+                fontsize=9,
+                color="#222222",
+                bbox=dict(
+                    facecolor="white",
+                    alpha=0.75,
+                    edgecolor="#cccccc",
+                    boxstyle="round,pad=0.3",
+                ),
+                zorder=20,
+            )
 
     def update_info_label(self, entry, duration_ms: float):
         end_ms = self.oto_cutoff_to_end_ms(entry.offset, entry.cutoff, duration_ms)
