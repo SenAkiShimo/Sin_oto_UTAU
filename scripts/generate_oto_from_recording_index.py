@@ -3,6 +3,7 @@ import argparse
 import joblib
 import pandas as pd
 import sys
+import numpy as np
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
@@ -35,6 +36,79 @@ FEATURE_COLUMNS = [
     "local_zero_crossing_rate",
 ]
 
+def estimate_real_onset_ms(
+    y: np.ndarray,
+    sr: int,
+    rough_start_ms: float,
+    rough_end_ms: float,
+    ignore_after_marker_ms: float = 60.0,
+    pre_margin_ms: float = 20.0,
+    min_sustain_ms: float = 35.0,
+) -> float:
+
+    duration_ms = len(y) / sr * 1000.0
+
+    search_start_ms = max(0.0, rough_start_ms + ignore_after_marker_ms)
+    search_end_ms = min(duration_ms, rough_end_ms)
+
+    if search_end_ms <= search_start_ms + 50:
+        return max(0.0, rough_start_ms)
+
+    start_sample = int(search_start_ms / 1000.0 * sr)
+    end_sample = int(search_end_ms / 1000.0 * sr)
+
+    segment = y[start_sample:end_sample]
+
+    if len(segment) == 0:
+        return max(0.0, rough_start_ms)
+
+    if segment.ndim > 1:
+        segment = segment[:, 0]
+
+    frame_ms = 10.0
+    hop_ms = 5.0
+
+    frame_len = max(1, int(sr * frame_ms / 1000.0))
+    hop_len = max(1, int(sr * hop_ms / 1000.0))
+
+    rms_values = []
+
+    for i in range(0, max(1, len(segment) - frame_len), hop_len):
+        frame = segment[i:i + frame_len]
+        if len(frame) == 0:
+            continue
+        rms = float(np.sqrt(np.mean(frame ** 2)))
+        rms_values.append(rms)
+
+    if not rms_values:
+        return max(0.0, rough_start_ms)
+
+    rms_values = np.array(rms_values)
+
+    noise_floor = float(np.percentile(rms_values, 20))
+    peak = float(np.percentile(rms_values, 95))
+
+    if peak <= noise_floor * 1.2:
+        return max(0.0, rough_start_ms)
+
+    threshold = noise_floor + (peak - noise_floor) * 0.28
+
+    sustain_frames = max(1, int(min_sustain_ms / hop_ms))
+
+    for idx in range(0, len(rms_values) - sustain_frames + 1):
+        window = rms_values[idx:idx + sustain_frames]
+
+        if np.all(window > threshold):
+            onset_ms = search_start_ms + idx * hop_ms
+            return max(0.0, onset_ms - pre_margin_ms)
+
+    active = np.where(rms_values > threshold)[0]
+
+    if len(active) > 0:
+        onset_ms = search_start_ms + int(active[0]) * hop_ms
+        return max(0.0, onset_ms - pre_margin_ms)
+
+    return max(0.0, rough_start_ms)
 
 def predict_entry(model, recording_dir: Path, row: pd.Series) -> OtoEntry:
     wav_name = str(row["wav"])
@@ -48,8 +122,8 @@ def predict_entry(model, recording_dir: Path, row: pd.Series) -> OtoEntry:
     y, sr = load_wav_mono(wav_path)
     full_duration_ms = len(y) / sr * 1000.0
 
-    # 在 rough_start 附近往前留一点，方便检测真实起音
-    window_start_ms = max(0.0, rough_start_ms - 120.0)
+
+    window_start_ms = max(0.0, rough_start_ms)
     window_end_ms = min(full_duration_ms, rough_end_ms + 180.0)
 
     local_y = slice_audio_ms(y, sr, window_start_ms, window_end_ms)
@@ -83,9 +157,16 @@ def predict_entry(model, recording_dir: Path, row: pd.Series) -> OtoEntry:
 
     consonant, cutoff, preutterance, overlap = prediction
 
-    # offset 不靠 AI 猜，而是 rough_start + 局部 onset
-    offset = window_start_ms + audio["onset_ms"] - 30.0
-    offset = max(0.0, offset)
+
+    offset = estimate_real_onset_ms(
+        y=y,
+        sr=sr,
+        rough_start_ms=rough_start_ms,
+        rough_end_ms=rough_end_ms,
+        ignore_after_marker_ms=60.0,
+        pre_margin_ms=25.0,
+        min_sustain_ms=35.0,
+    )
 
     # cutoff 先用 AI，后面再加规则优化
     entry = OtoEntry(
