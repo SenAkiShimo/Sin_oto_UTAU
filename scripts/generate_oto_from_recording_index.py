@@ -91,7 +91,7 @@ def estimate_real_onset_ms(
     if peak <= noise_floor * 1.2:
         return max(0.0, rough_start_ms)
 
-    threshold = noise_floor + (peak - noise_floor) * 0.28
+    threshold = noise_floor + (peak - noise_floor) * 0.45
 
     sustain_frames = max(1, int(min_sustain_ms / hop_ms))
 
@@ -163,12 +163,11 @@ def predict_entry(model, recording_dir: Path, row: pd.Series) -> OtoEntry:
         sr=sr,
         rough_start_ms=rough_start_ms,
         rough_end_ms=rough_end_ms,
-        ignore_after_marker_ms=60.0,
-        pre_margin_ms=25.0,
-        min_sustain_ms=35.0,
+        ignore_after_marker_ms=180.0,
+        pre_margin_ms=20.0,
+        min_sustain_ms=80.0,
     )
 
-    # cutoff 先用 AI，后面再加规则优化
     entry = OtoEntry(
         wav=wav_name,
         alias=alias,
