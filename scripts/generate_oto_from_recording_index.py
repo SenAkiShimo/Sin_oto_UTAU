@@ -41,9 +41,9 @@ def estimate_real_onset_ms(
     sr: int,
     rough_start_ms: float,
     rough_end_ms: float,
-    ignore_after_marker_ms: float = 60.0,
-    pre_margin_ms: float = 20.0,
-    min_sustain_ms: float = 35.0,
+    ignore_after_marker_ms: float = 180.0,
+    pre_margin_ms: float = 15.0,
+    min_sustain_ms: float = 80.0,
 ) -> float:
 
     duration_ms = len(y) / sr * 1000.0
@@ -52,7 +52,7 @@ def estimate_real_onset_ms(
     search_end_ms = min(duration_ms, rough_end_ms)
 
     if search_end_ms <= search_start_ms + 50:
-        return max(0.0, rough_start_ms)
+        return max(0.0, rough_start_ms + ignore_after_marker_ms)
 
     start_sample = int(search_start_ms / 1000.0 * sr)
     end_sample = int(search_end_ms / 1000.0 * sr)
@@ -60,7 +60,7 @@ def estimate_real_onset_ms(
     segment = y[start_sample:end_sample]
 
     if len(segment) == 0:
-        return max(0.0, rough_start_ms)
+        return max(0.0, rough_start_ms + ignore_after_marker_ms)
 
     if segment.ndim > 1:
         segment = segment[:, 0]
@@ -81,7 +81,7 @@ def estimate_real_onset_ms(
         rms_values.append(rms)
 
     if not rms_values:
-        return max(0.0, rough_start_ms)
+        return max(0.0, rough_start_ms + ignore_after_marker_ms)
 
     rms_values = np.array(rms_values)
 
@@ -89,7 +89,7 @@ def estimate_real_onset_ms(
     peak = float(np.percentile(rms_values, 95))
 
     if peak <= noise_floor * 1.2:
-        return max(0.0, rough_start_ms)
+        return max(0.0, rough_start_ms + ignore_after_marker_ms)
 
     threshold = noise_floor + (peak - noise_floor) * 0.45
 
@@ -108,9 +108,9 @@ def estimate_real_onset_ms(
         onset_ms = search_start_ms + int(active[0]) * hop_ms
         return max(0.0, onset_ms - pre_margin_ms)
 
-    return max(0.0, rough_start_ms)
+    return max(0.0, rough_start_ms + ignore_after_marker_ms)
 
-def predict_entry(model, recording_dir: Path, row: pd.Series) -> OtoEntry:
+def predict_entry(model, recording_dir: Path, row: pd.Series, next_row=None) -> OtoEntry:
     wav_name = str(row["wav"])
     alias = str(row["alias"])
 
@@ -121,7 +121,6 @@ def predict_entry(model, recording_dir: Path, row: pd.Series) -> OtoEntry:
 
     y, sr = load_wav_mono(wav_path)
     full_duration_ms = len(y) / sr * 1000.0
-
 
     window_start_ms = max(0.0, rough_start_ms)
     window_end_ms = min(full_duration_ms, rough_end_ms + 180.0)
@@ -155,8 +154,7 @@ def predict_entry(model, recording_dir: Path, row: pd.Series) -> OtoEntry:
 
     prediction = model.predict(x)[0]
 
-    consonant, cutoff, preutterance, overlap = prediction
-
+    consonant, _predicted_cutoff, preutterance, overlap = prediction
 
     offset = estimate_real_onset_ms(
         y=y,
@@ -164,9 +162,22 @@ def predict_entry(model, recording_dir: Path, row: pd.Series) -> OtoEntry:
         rough_start_ms=rough_start_ms,
         rough_end_ms=rough_end_ms,
         ignore_after_marker_ms=180.0,
-        pre_margin_ms=20.0,
+        pre_margin_ms=15.0,
         min_sustain_ms=80.0,
     )
+
+    if next_row is not None and str(next_row["wav"]) == wav_name:
+        next_start_ms = float(next_row["rough_start_ms"])
+
+        safe_min_end_ms = offset + max(float(consonant), float(preutterance), float(overlap)) + 80.0
+        cutoff_end_ms = max(safe_min_end_ms, next_start_ms - 40.0)
+    else:
+
+        cutoff_end_ms = min(full_duration_ms, rough_end_ms + 150.0)
+
+    cutoff_end_ms = max(0.0, min(full_duration_ms, cutoff_end_ms))
+
+    cutoff = cutoff_end_ms - full_duration_ms
 
     entry = OtoEntry(
         wav=wav_name,
@@ -191,27 +202,93 @@ def generate(recording_dir: str, model_path: str, output_path: str) -> None:
     if not index_path.exists():
         raise FileNotFoundError(f"Missing recording_index.csv: {index_path}")
 
+    if not model_path.exists():
+        raise FileNotFoundError(f"Missing model file: {model_path}")
+
     model = joblib.load(model_path)
     df = pd.read_csv(index_path)
 
-    required = ["wav", "alias", "rough_start_ms", "rough_end_ms"]
-    for col in required:
+    required_columns = [
+        "wav",
+        "alias",
+        "rough_start_ms",
+        "rough_end_ms",
+        "alias_index",
+    ]
+
+    for col in required_columns:
         if col not in df.columns:
             raise ValueError(f"recording_index.csv 缺少列：{col}")
 
+    df["rough_start_ms"] = pd.to_numeric(df["rough_start_ms"], errors="coerce")
+    df["rough_end_ms"] = pd.to_numeric(df["rough_end_ms"], errors="coerce")
+    df["alias_index"] = pd.to_numeric(df["alias_index"], errors="coerce")
+
+    df = df.dropna(subset=["wav", "alias", "rough_start_ms", "rough_end_ms", "alias_index"])
+
+    if df.empty:
+        raise ValueError("recording_index.csv 没有可用数据。")
+
+    df = df.sort_values(["wav", "alias_index"]).reset_index(drop=True)
+
     entries = []
+    skipped = 0
 
-    for _, row in df.iterrows():
-        try:
-            entry = predict_entry(model, recording_dir, row)
-            entries.append(entry)
-            print(f"Generated: {entry.wav}={entry.alias}")
-        except Exception as e:
-            print(f"Skipped row because of error: {e}")
+    for wav_name, group in df.groupby("wav", sort=False):
+        group = group.sort_values("alias_index").reset_index(drop=True)
 
+        wav_path = recording_dir / str(wav_name)
+
+        if not wav_path.exists():
+            print(f"Skipped wav group because wav file is missing: {wav_path}")
+            skipped += len(group)
+            continue
+
+        print(f"Processing wav: {wav_name} ({len(group)} entries)")
+
+        for i, row in group.iterrows():
+            if i + 1 < len(group):
+                next_row = group.iloc[i + 1]
+            else:
+                next_row = None
+
+            try:
+                entry = predict_entry(
+                    model=model,
+                    recording_dir=recording_dir,
+                    row=row,
+                    next_row=next_row,
+                )
+
+                entries.append(entry)
+
+                print(
+                    f"Generated: {entry.wav}={entry.alias},"
+                    f"{entry.offset:.3f},"
+                    f"{entry.consonant:.3f},"
+                    f"{entry.cutoff:.3f},"
+                    f"{entry.preutterance:.3f},"
+                    f"{entry.overlap:.3f}"
+                )
+
+            except Exception as e:
+                skipped += 1
+                print(
+                    f"Skipped row wav={row.get('wav')} alias={row.get('alias')} "
+                    f"because of error: {e}"
+                )
+
+    if not entries:
+        raise RuntimeError("没有成功生成任何 oto entry。请检查 wav、recording_index.csv 和模型。")
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     write_oto(entries, output_path)
+
     print(f"Saved oto.ini: {output_path}")
-    print(f"Total entries: {len(entries)}")
+    print(f"Total generated entries: {len(entries)}")
+    print(f"Skipped entries: {skipped}")
+
+
 
 
 def main():

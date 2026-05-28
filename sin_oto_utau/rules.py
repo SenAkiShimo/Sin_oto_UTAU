@@ -7,11 +7,9 @@ def fix_entry(entry: OtoEntry) -> OtoEntry:
     entry.preutterance = max(1.0, float(entry.preutterance))
     entry.overlap = max(0.0, float(entry.overlap))
 
-    # overlap 一般不应该超过 preutterance 太多
     if entry.overlap > entry.preutterance * 0.6:
         entry.overlap = entry.preutterance * 0.6
 
-    # consonant 至少覆盖 preutterance
     if entry.consonant < entry.preutterance:
         entry.consonant = entry.preutterance
 
