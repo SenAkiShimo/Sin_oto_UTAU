@@ -41,17 +41,17 @@ def estimate_real_onset_ms(
     sr: int,
     rough_start_ms: float,
     rough_end_ms: float,
-    ignore_after_marker_ms: float = 180.0,
-    pre_margin_ms: float = 15.0,
-    min_sustain_ms: float = 80.0,
+    ignore_after_marker_ms: float = 250.0,
+    pre_margin_ms: float = 25.0,
+    min_sustain_ms: float = 90.0,
 ) -> float:
-
+    
     duration_ms = len(y) / sr * 1000.0
 
     search_start_ms = max(0.0, rough_start_ms + ignore_after_marker_ms)
     search_end_ms = min(duration_ms, rough_end_ms)
 
-    if search_end_ms <= search_start_ms + 50:
+    if search_end_ms <= search_start_ms + 80:
         return max(0.0, rough_start_ms + ignore_after_marker_ms)
 
     start_sample = int(search_start_ms / 1000.0 * sr)
@@ -65,7 +65,9 @@ def estimate_real_onset_ms(
     if segment.ndim > 1:
         segment = segment[:, 0]
 
-    frame_ms = 10.0
+    segment = segment - np.mean(segment)
+
+    frame_ms = 15.0
     hop_ms = 5.0
 
     frame_len = max(1, int(sr * frame_ms / 1000.0))
@@ -83,32 +85,59 @@ def estimate_real_onset_ms(
     if not rms_values:
         return max(0.0, rough_start_ms + ignore_after_marker_ms)
 
-    rms_values = np.array(rms_values)
+    rms = np.array(rms_values)
 
-    noise_floor = float(np.percentile(rms_values, 20))
-    peak = float(np.percentile(rms_values, 95))
+    smooth_width = 5
+    if len(rms) >= smooth_width:
+        kernel = np.ones(smooth_width) / smooth_width
+        rms_smooth = np.convolve(rms, kernel, mode="same")
+    else:
+        rms_smooth = rms
 
-    if peak <= noise_floor * 1.2:
+    noise_floor = float(np.percentile(rms_smooth, 15))
+    mid_energy = float(np.percentile(rms_smooth, 70))
+    high_energy = float(np.percentile(rms_smooth, 95))
+    peak = float(np.max(rms_smooth))
+
+    if peak < 0.003:
         return max(0.0, rough_start_ms + ignore_after_marker_ms)
 
-    threshold = noise_floor + (peak - noise_floor) * 0.45
+    if high_energy <= noise_floor * 1.5:
+        return max(0.0, rough_start_ms + ignore_after_marker_ms)
+
+    main_threshold = noise_floor + (high_energy - noise_floor) * 0.55
+
+    backtrack_threshold = noise_floor + (high_energy - noise_floor) * 0.22
+
+    main_threshold = max(main_threshold, 0.006)
+    backtrack_threshold = max(backtrack_threshold, 0.0035)
 
     sustain_frames = max(1, int(min_sustain_ms / hop_ms))
 
-    for idx in range(0, len(rms_values) - sustain_frames + 1):
-        window = rms_values[idx:idx + sustain_frames]
+    main_idx = None
 
-        if np.all(window > threshold):
-            onset_ms = search_start_ms + idx * hop_ms
-            return max(0.0, onset_ms - pre_margin_ms)
+    for idx in range(0, len(rms_smooth) - sustain_frames + 1):
+        window = rms_smooth[idx:idx + sustain_frames]
 
-    active = np.where(rms_values > threshold)[0]
+        if np.mean(window > main_threshold) >= 0.75:
+            main_idx = idx
+            break
 
-    if len(active) > 0:
-        onset_ms = search_start_ms + int(active[0]) * hop_ms
-        return max(0.0, onset_ms - pre_margin_ms)
+    if main_idx is None:
+        peak_idx = int(np.argmax(rms_smooth))
+        main_idx = max(0, peak_idx - sustain_frames)
 
-    return max(0.0, rough_start_ms + ignore_after_marker_ms)
+    onset_idx = main_idx
+
+    for idx in range(main_idx, -1, -1):
+        if rms_smooth[idx] < backtrack_threshold:
+            onset_idx = idx + 1
+            break
+        onset_idx = idx
+
+    onset_ms = search_start_ms + onset_idx * hop_ms
+
+    return max(0.0, onset_ms - pre_margin_ms)
 
 def predict_entry(model, recording_dir: Path, row: pd.Series, next_row=None) -> OtoEntry:
     wav_name = str(row["wav"])
@@ -161,9 +190,9 @@ def predict_entry(model, recording_dir: Path, row: pd.Series, next_row=None) -> 
         sr=sr,
         rough_start_ms=rough_start_ms,
         rough_end_ms=rough_end_ms,
-        ignore_after_marker_ms=180.0,
-        pre_margin_ms=15.0,
-        min_sustain_ms=80.0,
+        ignore_after_marker_ms=250.0,
+        pre_margin_ms=25.0,
+        min_sustain_ms=90.0,
     )
 
     if next_row is not None and str(next_row["wav"]) == wav_name:
